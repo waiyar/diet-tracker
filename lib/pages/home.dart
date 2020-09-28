@@ -1,5 +1,4 @@
-import 'package:diet_tracker/models/Food.dart';
-import 'package:diet_tracker/models/foodListModel.dart';
+import 'package:diet_tracker/data/database.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
@@ -17,13 +16,17 @@ class Homepage extends StatelessWidget {
   Widget build(BuildContext context) {
     Widget mainSection = Container(
       padding: const EdgeInsets.all(20),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          _buildMealColumn('Breakfast'),
-          _buildMealColumn('Lunch'),
-          _buildMealColumn('Dinner'),
-        ],
+      child: Provider<MyDatabase>(
+        create: (context) => MyDatabase(),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _buildMealColumn(mealType.breakfast),
+            _buildMealColumn(mealType.lunch),
+            _buildMealColumn(mealType.dinner),
+          ],
+        ),
+        dispose: (context, db) => db.close(),
       ),
     );
 
@@ -38,7 +41,7 @@ class Homepage extends StatelessWidget {
     );
   }
 
-  Container _buildMealColumn(String label) {
+  Container _buildMealColumn(mealType type) {
     return Container(
       padding: const EdgeInsets.all(20.0),
       margin: const EdgeInsets.only(top: 20.0),
@@ -50,76 +53,98 @@ class Homepage extends StatelessWidget {
           Radius.circular(5.0),
         ),
       ),
-      child: ChangeNotifierProvider(
-        create: (context) => FoodListModel(),
-        child: FoodList(label),
-      ),
+      child: FoodList(type),
     );
   }
 }
 
 class FoodList extends StatelessWidget {
-  final String label;
-  FoodList(this.label);
+  final mealType type;
+  FoodList(this.type);
 
   @override
   Widget build(BuildContext context) {
-    return Column(
-      // Children to fill entire row
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        // Title and + icon
-        Row(
-          children: [
-            Expanded(
-              child: Text(
-                label,
-                style: TextStyle(
-                  fontSize: 32.0,
-                  fontWeight: FontWeight.w400,
-                ),
-              ),
-            ),
-            AddFoodButton(),
-          ],
-        ),
-        // List of Food
-        Container(
-          padding: const EdgeInsets.only(top: 20.0),
-          child: Consumer<FoodListModel>(
-            builder: (context, foodList, child) => Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: List<Text>.generate(
-                foodList.foods.length,
-                (index) => Text(
-                  foodList.foods[index].name,
-                  style: TextStyle(
-                    fontSize: 18.0,
+    final myDatabase = Provider.of<MyDatabase>(context);
+
+    return FutureBuilder<MealWithEntries>(
+        future: myDatabase.createEmptyMeal(type),
+        builder: (context, snapshot) {
+          if (snapshot.connectionState != ConnectionState.done) {
+            return Column();
+          }
+          return Column(
+            // Children to fill entire row
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              // Title and + icon
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      type.title,
+                      style: TextStyle(
+                        fontSize: 32.0,
+                        fontWeight: FontWeight.w400,
+                      ),
+                    ),
                   ),
+                  AddFoodButton(snapshot.data),
+                ],
+              ),
+              // List of Food
+              Container(
+                padding: const EdgeInsets.only(top: 20.0),
+                child: StreamBuilder<List<Food>>(
+                  stream: myDatabase.watchFoodInMeal(snapshot.data.meal),
+                  builder: (context, s) {
+                    if (s.hasData) {
+                      return Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: List<Text>.generate(
+                          s.data.length,
+                          (index) => Text(
+                            s.data[index].name,
+                            style: TextStyle(
+                              fontSize: 18.0,
+                            ),
+                          ),
+                        ),
+                      );
+                    }
+                    return Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [],
+                    );
+                  },
                 ),
               ),
-            ),
-          ),
-        ),
-      ],
-    );
+            ],
+          );
+        });
   }
 }
 
 class AddFoodButton extends StatefulWidget {
+  final meal;
+  AddFoodButton(this.meal);
   @override
-  _AddFoodButtonState createState() => _AddFoodButtonState();
+  _AddFoodButtonState createState() => _AddFoodButtonState(meal);
 }
 
 class _AddFoodButtonState extends State<AddFoodButton> {
   final addContoller = TextEditingController();
   final _formKey = GlobalKey<FormState>();
 
-  _addFood() {
-    // TODO: id from database;
+  final MealWithEntries meal;
+  _AddFoodButtonState(this.meal);
+
+  _addFood() async {
     // TODO: implement tags
-    final Food food = new Food(1, "test", [1, 2, 3]);
-    Provider.of<FoodListModel>(context, listen: false).add(food);
+    final myDatabase = Provider.of<MyDatabase>(context, listen: false);
+
+    final int foodId = await myDatabase.insertFood(addContoller.text);
+    meal.foods.add(Food(id: foodId, name: addContoller.text));
+    await myDatabase.insertMealWithFood(meal);
   }
 
   Future<void> _showAddDialog() async {
